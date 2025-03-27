@@ -8,13 +8,26 @@ st.title("📦 Simulador de Preço Negociado")
 
 # Lista com produtos e dados fixos
 produtos = [
-    {"Descrição": "ÁGUA DE 5L", "PREÇO SOBEL": 0.0, "MVA (%)": 56.86, "IPI (%)": 0.00},
-    {"Descrição": "AMACIANTE 5L", "PREÇO SOBEL": 0.0, "MVA (%)": 42.24, "IPI (%)": 0.00},
-    {"Descrição": "DESINFETANTE 2L", "PREÇO SOBEL": 0.0, "MVA (%)": 50.00, "IPI (%)": 5.00},
+    {"Descrição": "ÁGUA SANITÁRIA 5L", "PREÇO SOBEL": 0.0, "MVA (%)": 56.86, "IPI (%)": 0.00},
+    {"Descrição": "ÁGUA SANITÁRIA 2L", "PREÇO SOBEL": 0.0, "MVA (%)": 56.86, "IPI (%)": 0.00},
+    {"Descrição": "ÁGUA SANITÁRIA 1L", "PREÇO SOBEL": 0.0, "MVA (%)": 56.86, "IPI (%)": 0.00},     
+    {"Descrição": "CLORO DE 5L / PRO", "PREÇO SOBEL": 0.0, "MVA (%)": 56.86, "IPI (%)": 0.00},
+    {"Descrição": "CLORO DE 2,5L",     "PREÇO SOBEL": 0.0, "MVA (%)": 56.86, "IPI (%)": 0.00},  
+    {"Descrição": "ALVEJANTE 1.5L",    "PREÇO SOBEL": 0.0, "MVA (%)": 56.86, "IPI (%)": 0.00},          
+    {"Descrição": "AMACIANTE 5L",      "PREÇO SOBEL": 0.0, "MVA (%)": 42.24, "IPI (%)": 0.00},
+    {"Descrição": "AMACIANTE 2L",      "PREÇO SOBEL": 0.0, "MVA (%)": 42.24, "IPI (%)": 0.00},        
+    {"Descrição": "DESINF. 2L",         "PREÇO SOBEL": 0.0, "MVA (%)": 50.00, "IPI (%)": 5.00},
+    {"Descrição": "DESINF. 2L CLORADO", "PREÇO SOBEL": 0.0, "MVA (%)": 50.00, "IPI (%)": 5.00},
+    {"Descrição": "DESINF. 5L",         "PREÇO SOBEL": 0.0, "MVA (%)": 50.00, "IPI (%)": 5.00},           
     {"Descrição": "LAVA LOUÇAS 500ML", "PREÇO SOBEL": 0.0, "MVA (%)": 35.60, "IPI (%)": 3.25},
-    {"Descrição": "LAVA ROUPAS 5L", "PREÇO SOBEL": 0.0, "MVA (%)": 32.08, "IPI (%)": 3.25},
+    {"Descrição": "LAVA LOUÇAS 5L",    "PREÇO SOBEL": 0.0, "MVA (%)": 35.60, "IPI (%)": 3.25},    
+    {"Descrição": "LAVA ROUPAS 3L", "PREÇO SOBEL": 0.0, "MVA (%)": 32.08, "IPI (%)": 3.25},
+    {"Descrição": "LAVA ROUPAS 1L", "PREÇO SOBEL": 0.0, "MVA (%)": 32.08, "IPI (%)": 3.25},        
+    {"Descrição": "LIMPA VIDROS SQUEEZE 500ML", "PREÇO SOBEL": 0.0, "MVA (%)": 42.38, "IPI (%)": 3.25},    
+    {"Descrição": "DESENGORDURANTE 500ML", "PREÇO SOBEL": 0.0, "MVA (%)": 42.38, "IPI (%)": 3.25},      
     {"Descrição": "MULTI-USO 500ML", "PREÇO SOBEL": 0.0, "MVA (%)": 42.38, "IPI (%)": 3.25},
     {"Descrição": "REMOVEDOR 1L", "PREÇO SOBEL": 0.0, "MVA (%)": 42.38, "IPI (%)": 3.25},
+    {"Descrição": "REMOVEDOR 500ML", "PREÇO SOBEL": 0.0, "MVA (%)": 42.38, "IPI (%)": 3.25},
 ]
 
 df_base = pd.DataFrame(produtos)
@@ -92,3 +105,4 @@ st.download_button(
     file_name="simulacao_preco_negociado.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
+
