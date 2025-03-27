@@ -16,9 +16,9 @@ produtos = [
     {"Descrição": "ALVEJANTE 1.5L",    "PREÇO SOBEL": 0.0, "MVA (%)": 56.86, "IPI (%)": 0.00},          
     {"Descrição": "AMACIANTE 5L",      "PREÇO SOBEL": 0.0, "MVA (%)": 42.24, "IPI (%)": 0.00},
     {"Descrição": "AMACIANTE 2L",      "PREÇO SOBEL": 0.0, "MVA (%)": 42.24, "IPI (%)": 0.00},        
-    {"Descrição": "DESINF. 2L",         "PREÇO SOBEL": 0.0, "MVA (%)": 50.00, "IPI (%)": 5.00},
-    {"Descrição": "DESINF. 2L CLORADO", "PREÇO SOBEL": 0.0, "MVA (%)": 50.00, "IPI (%)": 5.00},
-    {"Descrição": "DESINF. 5L",         "PREÇO SOBEL": 0.0, "MVA (%)": 50.00, "IPI (%)": 5.00},           
+    {"Descrição": "DESINF. 2L",         "PREÇO SOBEL": 0.0, "MVA (%)": 0.00, "IPI (%)": 5.00},
+    {"Descrição": "DESINF. 2L CLORADO", "PREÇO SOBEL": 0.0, "MVA (%)": 0.00, "IPI (%)": 5.00},
+    {"Descrição": "DESINF. 5L",         "PREÇO SOBEL": 0.0, "MVA (%)": 0.00, "IPI (%)": 5.00},           
     {"Descrição": "LAVA LOUÇAS 500ML", "PREÇO SOBEL": 0.0, "MVA (%)": 35.60, "IPI (%)": 3.25},
     {"Descrição": "LAVA LOUÇAS 5L",    "PREÇO SOBEL": 0.0, "MVA (%)": 35.60, "IPI (%)": 3.25},    
     {"Descrição": "LAVA ROUPAS 3L", "PREÇO SOBEL": 0.0, "MVA (%)": 32.08, "IPI (%)": 3.25},
@@ -105,4 +105,3 @@ st.download_button(
     file_name="simulacao_preco_negociado.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
-
