@@ -246,7 +246,7 @@ Somatório dos percentuais:
 - Os campos de **IPI, ICMS, COFINS, PIS, MVA e demais percentuais** devem estar preenchidos corretamente.
 - O **frete** impacta apenas quando o tipo for **CIF**.
 - **Bonificação, Comissão e Contrato** não entram na base de cálculo do ICMS-ST, sendo consideradas apenas na análise gerencial.
-- O cálculo de **IRPJ e CSLL** foi simplificado (25% e 9% respectivamente), podendo ser ajustado conforme o regime fiscal da empresa.
+- O cálculo de **IRPJ e CSLL** foi simplificado (25% e 9% respectivamente).
 - O campo **% Estratégico** adiciona um mark-up adicional ao preço de venda.
 
 ---
