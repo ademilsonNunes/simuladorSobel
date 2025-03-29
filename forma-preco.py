@@ -3,6 +3,10 @@ import pandas as pd
 import io
 import os
 
+# Inicializar o Session State para persistência dos dados editados
+if 'df_editado' not in st.session_state:
+    st.session_state.df_editado = None
+
 st.set_page_config(page_title="Simulador de Preço de Venda Sobel", layout="wide")
 st.title("📊 Simulador de Formação de Preço de Venda")
 st.image("Logo-Suprema-Slogan-Alta-ai-1.webp", width=300)
@@ -49,7 +53,7 @@ produtos_esperados = [
 df_base = df_base[df_base["Descrição"].isin(produtos_esperados)]
 
 # Preenche valores ausentes
-colunas_necessarias = ["Preço de Venda", "Quantidade", "Frete Caixa", "%Estrategico", "IPI", "ICMS", "MVA"]
+colunas_necessarias = ["Preço de Venda", "Quantidade", "Frete Caixa", "%Estrategico", "IPI", "ICMS ST", "ICMS", "MVA"]
 for col in colunas_necessarias:
     if col not in df_base.columns:
         df_base[col] = 0.0 if col != "Quantidade" else 1
@@ -64,8 +68,39 @@ if "Preço de Venda" in colunas and "Quantidade" in colunas:
     colunas.insert(colunas.index("Preço de Venda") + 1, colunas.pop(colunas.index("Quantidade")))
 df_base = df_base[colunas]
 
+# Função para preencher Preço de Venda com Preço de Equilíbrio
+def preencher_preco_equilibrio(df):
+    df_atualizado = df.copy()
+    for index, row in df_atualizado.iterrows():
+        custo_total_unit = row["Custo NET"] + row["Custo Fixo"]
+        frete_unit = row["Frete Caixa"] if tipo_frete == "CIF" else 0
+        despesas_percentuais = (
+            row["ICMS"] + row["COFINS"] + row["PIS"] +
+            row["Comissão"] + row["Bonificação"] +
+            row["Contigência"] + row["Contrato"] + row["%Estrategico"]
+        )
+        try:
+            preco_equilibrio_unit = (custo_total_unit + frete_unit) / (1 - despesas_percentuais)
+        except ZeroDivisionError:
+            preco_equilibrio_unit = 0
+        df_atualizado.at[index, "Preço de Venda"] = round(preco_equilibrio_unit, 2)
+    return df_atualizado
+
+# Botão para preencher Preço de Equilíbrio
+if st.button("📌 Preencher Preço de Venda com Ponto de Equilíbrio"):
+    if st.session_state.df_editado is not None:
+        df_atualizado = preencher_preco_equilibrio(st.session_state.df_editado)
+        st.session_state.df_editado = df_atualizado
+    else:
+        df_atualizado = preencher_preco_equilibrio(df_base)
+        st.session_state.df_editado = df_atualizado
+
+# Tabela editável
 st.markdown("### ✏️ Edite os dados abaixo para simulação em lote")
-df_editado = st.data_editor(df_base, use_container_width=True, num_rows="dynamic")
+if st.session_state.df_editado is None:
+    st.session_state.df_editado = df_base.copy()
+df_editado = st.data_editor(st.session_state.df_editado, use_container_width=True, num_rows="dynamic")
+st.session_state.df_editado = df_editado  # Atualiza o estado com as edições manuais
 
 # Cálculo para cada linha
 def calcular_linha(row):
@@ -74,6 +109,7 @@ def calcular_linha(row):
     subtotal = preco_venda * qtd
 
     frete_total = row["Frete Caixa"] * qtd if tipo_frete == "CIF" else 0
+    frete_unit = row["Frete Caixa"] if tipo_frete == "CIF" else 0
 
     ipi_total = subtotal * row["IPI"]
     mva_percentual = row["MVA"]
@@ -88,21 +124,39 @@ def calcular_linha(row):
         row["Comissão"] + row["Bonificação"] +
         row["Contigência"] + row["Contrato"] + row["%Estrategico"]
     )
-    despesas_reais = preco_venda * despesas_percentuais * qtd + frete_total
 
+    despesas_reais = preco_venda * despesas_percentuais * qtd + frete_total
     lucro_bruto = (preco_venda - custo_total_unit) * qtd - despesas_reais
-    lucro_liquido = lucro_bruto / 1.34 if lucro_bruto > 0 else lucro_bruto
-    irpj = lucro_liquido * 0.25 if lucro_liquido > 0 else 0
-    csll = lucro_liquido * 0.09 if lucro_liquido > 0 else 0
+
+    # Lucro líquido considerando IRPJ (25%) e CSLL (9%)
+    if lucro_bruto > 0:
+        irpj = lucro_bruto * 0.25
+        csll = lucro_bruto * 0.09
+        lucro_liquido = lucro_bruto - irpj - csll
+    else:
+        irpj = 0
+        csll = 0
+        lucro_liquido = lucro_bruto
+
     receita_total = subtotal
     lucro_percentual = (lucro_liquido / receita_total) * 100 if receita_total > 0 else 0
     total_nf = subtotal + ipi_total + icms_st
+
+    # Calcular Preço de Equilíbrio se lucro líquido for negativo
+    if lucro_liquido < 0:
+        try:
+            preco_equilibrio_unit = (custo_total_unit + frete_unit) / (1 - despesas_percentuais)
+        except ZeroDivisionError:
+            preco_equilibrio_unit = 0
+    else:
+        preco_equilibrio_unit = preco_venda  # Mantém o preço de venda se já for positivo
+
+    preco_equilibrio = round(preco_equilibrio_unit, 2)
 
     return pd.Series({
         "Subtotal (R$)": subtotal,
         "Frete Total (R$)": frete_total,
         "IPI (R$)": ipi_total,
-        "ICMS (R$)": icms_proprio,
         "Base ICMS-ST (R$)": base_icms_st,
         "ICMS-ST (R$)": icms_st,
         "Lucro Bruto (R$)": lucro_bruto,
@@ -110,14 +164,26 @@ def calcular_linha(row):
         "IRPJ (R$)": irpj,
         "CSLL (R$)": csll,
         "Lucro %": lucro_percentual,
-        "Total NF (R$)": total_nf
+        "Total NF (R$)": total_nf,
+        "Ponto de Equilíbrio (R$)": preco_equilibrio
     })
 
-resultados = df_editado.apply(calcular_linha, axis=1)
-resultado_final = pd.concat([df_editado, resultados], axis=1)
+# Aplicar cálculos
+resultados = st.session_state.df_editado.apply(calcular_linha, axis=1)
+resultado_final = pd.concat([st.session_state.df_editado, resultados], axis=1)
 
+# Exibir resultados com destaque de negativos em vermelho
 st.markdown("### 📊 Resultado da Simulação")
-st.dataframe(resultado_final.style.format({
+
+def color_negative_red(val):
+    try:
+        if float(val) < 0:
+            return 'color: red'
+        return 'color: black'
+    except (ValueError, TypeError):
+        return 'color: black'
+
+styled_df = resultado_final.style.format({
     "Custo NET": "R$ {:.2f}",
     "Custo Fixo": "R$ {:.2f}",
     "Preço de Venda": "R$ {:.2f}",
@@ -125,7 +191,6 @@ st.dataframe(resultado_final.style.format({
     "Subtotal (R$)": "R$ {:.2f}",
     "Frete Total (R$)": "R$ {:.2f}",
     "IPI (R$)": "R$ {:.2f}",
-    "ICMS (R$)": "R$ {:.2f}",
     "Base ICMS-ST (R$)": "R$ {:.2f}",
     "ICMS-ST (R$)": "R$ {:.2f}",
     "Lucro Bruto (R$)": "R$ {:.2f}",
@@ -133,8 +198,12 @@ st.dataframe(resultado_final.style.format({
     "IRPJ (R$)": "R$ {:.2f}",
     "CSLL (R$)": "R$ {:.2f}",
     "Lucro %": "{:.2f}%",
-    "Total NF (R$)": "R$ {:.2f}"
-}), use_container_width=True)
+    "Total NF (R$)": "R$ {:.2f}",
+    "Ponto de Equilíbrio (R$)": "R$ {:.2f}"
+}).apply(lambda x: [color_negative_red(v) for v in x], 
+        subset=["Lucro Bruto (R$)", "Lucro Líquido (R$)", "Lucro %"])
+
+st.dataframe(styled_df, use_container_width=True)
 
 # Exportação para Excel
 st.markdown("### 📄 Baixar resultado em Excel")
@@ -150,8 +219,6 @@ st.download_button(
     file_name="resultado_simulacao.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
-
-import streamlit as st
 
 st.markdown("""
 ### ℹ️ **Notas Explicativas**
@@ -246,9 +313,20 @@ Somatório dos percentuais:
 - Os campos de **IPI, ICMS, COFINS, PIS, MVA e demais percentuais** devem estar preenchidos corretamente.
 - O **frete** impacta apenas quando o tipo for **CIF**.
 - **Bonificação, Comissão e Contrato** não entram na base de cálculo do ICMS-ST, sendo consideradas apenas na análise gerencial.
-- O cálculo de **IRPJ e CSLL** foi simplificado (25% e 9% respectivamente).
+- O cálculo de **IRPJ e CSLL** foi simplificado (25% e 9% respectivamente), podendo ser ajustado conforme o regime fiscal da empresa.
 - O campo **% Estratégico** adiciona um mark-up adicional ao preço de venda.
 
 ---
+
+**ℹ️ Nota Complementar: Lógica do Ponto de Equilíbrio**
+
+O "Preço de Equilíbrio" reflete o valor mínimo de venda necessário para cobrir todos os custos, despesas e impostos, resultando em um lucro líquido igual a zero. Abaixo, detalhamos a metodologia aplicada para esse cálculo:
+
+1. **Preço de Venda Inicial:** O simulador parte do preço de venda informado pelo usuário na tabela editável.
+2. **Cálculo do Lucro Líquido:** São descontados os custos fixos (Custo NET + Custo Fixo + Frete, se CIF), as despesas percentuais (ICMS, COFINS, PIS, Comissão, etc.) e, quando houver lucro bruto positivo, os impostos sobre o lucro — IRPJ (25%) e CSLL (9%).
+3. **Condição de Equilíbrio:** 
+   - Se o lucro líquido for positivo ou zero com o preço informado, o "Preço de Equilíbrio" mantém o valor do preço de venda, indicando que a operação já é viável.
+   - Se o lucro líquido for negativo, o "Preço de Equilíbrio" é recalculado para garantir que a receita iguale os custos e despesas, zerando o lucro líquido.
+4. **Fórmula do Preço de Equilíbrio (quando lucro é negativo):**
 """)
 
