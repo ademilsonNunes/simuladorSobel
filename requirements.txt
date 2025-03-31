@@ -4,3 +4,5 @@ dash
 plotly
 openpyxl
 dash_table
+fuzzywuzzy
+xlsxwriter
