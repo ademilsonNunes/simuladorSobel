@@ -1,5 +1,6 @@
-streamlit
 pandas
-scipy
-xlsxwriter
+streamlit
+dash
+plotly
 openpyxl
+dash_table
