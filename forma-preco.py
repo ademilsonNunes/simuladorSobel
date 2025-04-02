@@ -7,7 +7,7 @@ st.set_page_config(page_title="Simulador de Preço de Venda Sobel", layout="wide
 st.title("📊 Simulador de Formação de Preço de Venda")
 st.image("Logo-Suprema-Slogan-Alta-ai-1.webp", width=300)
 
-# Inicializar Session State
+# Session State
 if 'df_editado' not in st.session_state:
     st.session_state.df_editado = None
 
@@ -52,19 +52,19 @@ produtos_esperados = [
 ]
 df_base = df_base[df_base["Descrição"].isin(produtos_esperados)].copy()
 
-# Ajustes iniciais
+# Ajustes
 colunas_necessarias = ["Preço de Venda", "Quantidade", "Frete Caixa", "%Estrategico", "IPI", "ICMS ST", "ICMS", "MVA"]
 for col in colunas_necessarias:
     if col not in df_base.columns:
         df_base[col] = 0.0 if col != "Quantidade" else 1
 
-# Atualiza frete e contrato
 df_base["Frete Caixa"] = frete_padrao
 df_base["Contrato"] = contrato_percentual
 
-# Função para preencher preço de equilíbrio
+# Preencher Ponto de Equilíbrio
 def preencher_preco_equilibrio(df):
     df_atualizado = df.copy()
+    alertas = []
     for index, row in df_atualizado.iterrows():
         custo_total_unit = row["Custo NET"] + row["Custo Fixo"]
         frete_unit = row["Frete Caixa"] if tipo_frete == "CIF" else 0
@@ -73,26 +73,36 @@ def preencher_preco_equilibrio(df):
             row["Comissão"] + row["Bonificação"] +
             row["Contigência"] + row["Contrato"] + row["%Estrategico"]
         )
-        try:
-            preco_equilibrio_unit = (custo_total_unit + frete_unit) / (1 - despesas_percentuais)
-        except ZeroDivisionError:
+
+        if despesas_percentuais >= 1:
+            alertas.append(f"{row['Descrição']}: Despesas acima de 100%.")
             preco_equilibrio_unit = 0
-        df_atualizado.at[index, "Preço de Venda"] = round(preco_equilibrio_unit, 2)
-    return df_atualizado
+        else:
+            try:
+                preco_equilibrio_unit = (custo_total_unit + frete_unit) / (1 - despesas_percentuais)
+                preco_equilibrio_unit = round(preco_equilibrio_unit, 2)
+            except ZeroDivisionError:
+                preco_equilibrio_unit = 0
 
-# Botão Ponto de Equilíbrio
+        df_atualizado.at[index, "Preço de Venda"] = preco_equilibrio_unit
+
+    return df_atualizado, alertas
+
+# Botão
 if st.button("📌 Preencher com Ponto de Equilíbrio"):
-    df_base = preencher_preco_equilibrio(df_base)
+    df_base, alertas = preencher_preco_equilibrio(df_base)
+    if alertas:
+        for msg in alertas:
+            st.warning(msg)
 
-# Atualiza Session State
 st.session_state.df_editado = df_base.copy()
 
-# Editor de Dados
+# Editor
 st.markdown("### ✏️ Edite os dados abaixo para simulação em lote")
 df_editado = st.data_editor(st.session_state.df_editado, use_container_width=True, num_rows="dynamic")
 st.session_state.df_editado = df_editado
 
-# Função de cálculo
+# Função cálculo
 def calcular_linha(row):
     preco_venda = row["Preço de Venda"]
     qtd = row["Quantidade"]
@@ -131,9 +141,10 @@ def calcular_linha(row):
     lucro_percentual = (lucro_liquido / receita_total) * 100 if receita_total > 0 else 0
     total_nf = subtotal + ipi_total + icms_st
 
-    if lucro_liquido < 0:
+    if lucro_liquido < 0 and despesas_percentuais < 1:
         try:
             preco_equilibrio_unit = (custo_total_unit + frete_unit) / (1 - despesas_percentuais)
+            preco_equilibrio_unit = round(preco_equilibrio_unit, 2)
         except ZeroDivisionError:
             preco_equilibrio_unit = 0
     else:
@@ -151,14 +162,14 @@ def calcular_linha(row):
         "CSLL (R$)": csll,
         "Lucro %": lucro_percentual,
         "Total NF (R$)": total_nf,
-        "Ponto de Equilíbrio (R$)": round(preco_equilibrio_unit, 2)
+        "Ponto de Equilíbrio (R$)": preco_equilibrio_unit
     })
 
-# Aplicar cálculo
+# Cálculo
 resultados = st.session_state.df_editado.apply(calcular_linha, axis=1)
 resultado_final = pd.concat([st.session_state.df_editado, resultados], axis=1)
 
-# Tabela de resultados
+# Resultado
 st.markdown("### 📊 Resultado da Simulação")
 def color_negative_red(val):
     try:
