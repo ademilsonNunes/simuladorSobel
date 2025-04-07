@@ -1,325 +1,448 @@
 import streamlit as st
 import pandas as pd
-import io
+import plotly.express as px
+import openai
 import os
+from dotenv import load_dotenv
 
-st.set_page_config(page_title="Simulador de Preço de Venda Sobel", layout="wide")
-st.title("📊 Simulador de Formação de Preço de Venda")
-st.image("Logo-Suprema-Slogan-Alta-ai-1.webp", width=300)
+# Carrega a chave da API do arquivo .env
+load_dotenv()
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Session State
-if 'df_editado' not in st.session_state:
-    st.session_state.df_editado = None
+def gerar_relatorio_estrategico(prompt):
+    try:
+        resposta = openai.ChatCompletion.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=2000
+        )
+        return resposta['choices'][0]['message']['content']
+    except Exception as e:
+        st.error(f"Erro ao gerar relatório: {str(e)}")
+        return None
 
-# Carga padrão
-arquivo_padrao = "Custo de reposição.xlsx"
-if os.path.exists(arquivo_padrao):
-    df_padrao = pd.read_excel(arquivo_padrao)
-    df_padrao.columns = df_padrao.columns.str.strip()
-else:
-    st.warning("Arquivo padrão não encontrado.")
-    df_padrao = pd.DataFrame()
+# =============================
+# CONFIGURAÇÃO DA PÁGINA
+# =============================
+st.set_page_config(page_title="Análise Comercial e Controladoria", layout="wide")
+st.title("📊 One-Page Report Comercial & Controladoria")
 
-# Sidebar
-st.sidebar.header("Parâmetros Globais")
-frete_padrao = st.sidebar.number_input("Frete por Caixa (R$)", min_value=0.0, value=1.50, step=0.01)
-contrato_percentual = st.sidebar.number_input("% Contrato", min_value=0.0, max_value=100.0, value=1.00, step=0.01) / 100
-uf_selecionado = st.sidebar.selectbox("Selecione a UF", options=df_padrao["UF"].dropna().unique().tolist()) if not df_padrao.empty else ""
-tipo_frete = st.sidebar.radio("Tipo de Frete", ("CIF", "FOB"))
+st.markdown("#### 1️⃣ Upload e Validação dos Dados")
+st.markdown("Envie o arquivo Excel com as abas **CARTEIRA** e **Mark-up** para análise.")
 
-# Upload
-uploaded_file = st.file_uploader("📂 Envie sua planilha atualizada (.xlsx)", type="xlsx")
+# =============================
+# FUNÇÕES UTILITÁRIAS
+# =============================
 
+def carregar_dados(caminho_arquivo):
+    try:
+        excel_data = pd.ExcelFile(caminho_arquivo)
+        if {"CARTEIRA", "Mark-up"}.issubset(excel_data.sheet_names):
+            carteira_df = excel_data.parse("CARTEIRA")
+            markup_df = excel_data.parse("Mark-up")
+            carteira_df.columns = carteira_df.columns.str.strip().str.upper()
+            markup_df.columns = markup_df.columns.str.strip().str.upper()
+            return carteira_df, markup_df
+        else:
+            st.error("O arquivo deve conter as abas 'CARTEIRA' e 'Mark-up'.")
+            return None, None
+    except Exception as e:
+        st.error(f"Erro ao carregar o arquivo: {str(e)}")
+        return None, None
+
+# =============================
+# FORMATADORES
+# =============================
+formatar_moeda = lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+formatar_valor = lambda x: f"{x:,.0f}".replace(",", ".")
+
+def highlight_negative(row):
+    if "% LUCRO" in row:
+        lucro = float(row["% LUCRO"].replace("%", "").replace(",", "."))
+    else:
+        lucro = float(row["% LUCRO TOTAL"].replace("%", "").replace(",", "."))
+    return ["background-color: #ffb3b3" if lucro < 0 else "" for _ in row]
+
+# =============================
+# UPLOAD DO ARQUIVO
+# =============================
+uploaded_file = st.file_uploader("📂 Escolha o arquivo Excel", type=["xlsx"])
 if uploaded_file:
-    df_base = pd.read_excel(uploaded_file)
-    df_base.columns = df_base.columns.str.strip()
-    df_base = df_base[df_base["UF"] == uf_selecionado].copy()
-elif not df_padrao.empty:
-    df_base = df_padrao[df_padrao["UF"] == uf_selecionado].copy()
-else:
-    st.stop()
+    carteira_df, markup_df = carregar_dados(uploaded_file)
 
-# Produtos esperados
-produtos_esperados = [
-    "ÁGUA SANITÁRIA 5L", "ÁGUA SANITÁRIA 2L", "ÁGUA SANITÁRIA 1L",
-    "CLORO DE 5L / PRO", "CLORO DE 2,5L", "ALVEJANTE 1.5L",
-    "AMACIANTE 5L", "AMACIANTE 2L",
-    "DESINF. 2L", "DESINF. 2L CLORADO", "DESINF. 5L",
-    "LAVA LOUÇAS 500ML", "LAVA LOUÇAS 5L",
-    "LAVA ROUPAS 5L", "LAVA ROUPAS 3L", "LAVA ROUPAS 1L",
-    "LIMPA VIDROS SQUEEZE 500ML", "DESENGORDURANTE 500ML",
-    "MULTI-USO 500ML", "REMOVEDOR 1L", "REMOVEDOR 500ML"
-]
-df_base = df_base[df_base["Descrição"].isin(produtos_esperados)].copy()
+    if carteira_df is not None:
+        st.success("✅ Arquivo carregado com sucesso!")
+        # =============================
+        # FILTROS
+        # =============================
+        st.markdown("---")
+        st.header("🎯 Filtros para Análise")
 
-# Ajustes
-colunas_necessarias = ["Preço de Venda", "Quantidade", "Frete Caixa", "%Estrategico", "IPI", "ICMS ST", "ICMS", "MVA"]
-for col in colunas_necessarias:
-    if col not in df_base.columns:
-        df_base[col] = 0.0 if col != "Quantidade" else 1
+        clientes = sorted(carteira_df["CLIENTE"].unique())
+        ufs = sorted(carteira_df["UF"].unique())
+        skus = sorted(carteira_df["SKU"].unique())
+        redes = sorted(carteira_df["REDE"].unique()) if "REDE" in carteira_df.columns else []
+        sups = sorted(carteira_df["SUP"].unique()) if "SUP" in carteira_df.columns else []
+        vends = sorted(carteira_df["VENDEDOR"].unique()) if "VENDEDOR" in carteira_df.columns else []
 
-df_base["Frete Caixa"] = frete_padrao
-df_base["Contrato"] = contrato_percentual
+        colf1, colf2, colf3, colf4, colf5, colf6 = st.columns(6)
+        cliente_sel = colf1.selectbox("Filtrar Cliente", ["Todos"] + clientes)
+        uf_sel = colf2.selectbox("Filtrar UF", ["Todos"] + ufs)
+        sku_sel = colf3.selectbox("Filtrar Produto (SKU)", ["Todos"] + skus)
+        rede_sel = colf4.selectbox("Filtrar Rede", ["Todos"] + redes) if redes else "Todos"
+        sup_sel = colf5.selectbox("Filtrar Supervisor", ["Todos"] + sups) if sups else "Todos"
+        vend_sel = colf6.selectbox("Filtrar Vendedor", ["Todos"] + vends) if vends else "Todos"
 
-# Preencher Ponto de Equilíbrio
-def preencher_preco_equilibrio(df):
-    df_atualizado = df.copy()
-    alertas = []
-    for index, row in df_atualizado.iterrows():
-        custo_total_unit = row["Custo NET"] + row["Custo Fixo"]
-        frete_unit = row["Frete Caixa"] if tipo_frete == "CIF" else 0
-        despesas_percentuais = (
-            row["ICMS"] + row["COFINS"] + row["PIS"] +
-            row["Comissão"] + row["Bonificação"] +
-            row["Contigência"] + row["Contrato"] + row["%Estrategico"]
+        # =============================
+        # APLICAÇÃO DOS FILTROS
+        # =============================
+        df_filtro = carteira_df.copy()
+        if cliente_sel != "Todos":
+            df_filtro = df_filtro[df_filtro["CLIENTE"] == cliente_sel]
+        if uf_sel != "Todos":
+            df_filtro = df_filtro[df_filtro["UF"] == uf_sel]
+        if sku_sel != "Todos":
+            df_filtro = df_filtro[df_filtro["SKU"] == sku_sel]
+        if rede_sel != "Todos" and "REDE" in df_filtro.columns:
+            df_filtro = df_filtro[df_filtro["REDE"] == rede_sel]
+        if sup_sel != "Todos" and "SUP" in df_filtro.columns:
+            df_filtro = df_filtro[df_filtro["SUP"] == sup_sel]
+        if vend_sel != "Todos" and "VENDEDOR" in df_filtro.columns:
+            df_filtro = df_filtro[df_filtro["VENDEDOR"] == vend_sel]
+
+        # =============================
+        # PAINEL RESUMO
+        # =============================
+        st.markdown("---")
+        st.header("📌 Painel Resumo")
+
+        total_volume = int(df_filtro["QTDE"].sum())
+        faturamento = df_filtro["VL.BRUTO"].sum()
+        lucro_liq = df_filtro["LUCRO LIQ"].sum()
+        preco_medio = faturamento / total_volume if total_volume > 0 else 0
+        perc_lucro = (lucro_liq / faturamento) * 100 if faturamento > 0 else 0
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Faturamento (R$)", formatar_moeda(faturamento))
+        col2.metric("Volume Total (unid)", formatar_valor(total_volume))
+        col3.metric("Preço Médio (R$)", formatar_moeda(preco_medio))
+        col4.metric("Lucro Líquido (R$)", f"{formatar_moeda(lucro_liq)} ({perc_lucro:.2f}%)")
+        # =============================
+        # ANÁLISE DE LUCRO POR CLIENTE
+        # =============================
+        st.markdown("---")
+        st.subheader("📄 Lucro por Cliente")
+
+        lucro_cliente = df_filtro.groupby("CLIENTE")[["VL.BRUTO", "LUCRO LIQ"]].sum().reset_index()
+        lucro_cliente["% LUCRO"] = (lucro_cliente["LUCRO LIQ"] / lucro_cliente["VL.BRUTO"]) * 100
+        lucro_cliente["VL.BRUTO"] = lucro_cliente["VL.BRUTO"].apply(formatar_moeda)
+        lucro_cliente["LUCRO LIQ"] = lucro_cliente["LUCRO LIQ"].apply(formatar_moeda)
+        lucro_cliente["% LUCRO"] = lucro_cliente["% LUCRO"].apply(lambda x: f"{x:.2f}%")
+
+        st.dataframe(
+            lucro_cliente.style.apply(
+                lambda row: ["background-color: #ffb3b3" if float(row["% LUCRO"].replace("%", "").replace(",", ".")) < 0 else "" for _ in row],
+                axis=1
+            ),
+            use_container_width=True
         )
 
-        if despesas_percentuais >= 1:
-            alertas.append(f"{row['Descrição']}: Despesas acima de 100%.")
-            preco_equilibrio_unit = 0
+        # =============================
+        # ANÁLISE DE LUCRO POR SKU
+        # =============================
+        st.subheader("📄 Lucro por Produto (SKU)")
+
+        lucro_sku = df_filtro.groupby("SKU")[["VL.BRUTO", "LUCRO LIQ"]].sum().reset_index()
+        lucro_sku["% LUCRO"] = (lucro_sku["LUCRO LIQ"] / lucro_sku["VL.BRUTO"]) * 100
+        lucro_sku["VL.BRUTO"] = lucro_sku["VL.BRUTO"].apply(formatar_moeda)
+        lucro_sku["LUCRO LIQ"] = lucro_sku["LUCRO LIQ"].apply(formatar_moeda)
+        lucro_sku["% LUCRO"] = lucro_sku["% LUCRO"].apply(lambda x: f"{x:.2f}%")
+
+        st.dataframe(
+            lucro_sku.style.apply(
+                lambda row: ["background-color: #ffb3b3" if float(row["% LUCRO"].replace("%", "").replace(",", ".")) < 0 else "" for _ in row],
+                axis=1
+            ),
+            use_container_width=True
+        )
+
+        # =============================
+        # GRÁFICOS DE LUCRO POR SKU
+        # =============================
+        st.markdown("---")
+        st.subheader("📊 Lucro Líquido por Produto (SKU) - Valor (R$)")
+
+        lucro_prod = df_filtro.groupby("SKU")["LUCRO LIQ"].sum().reset_index().sort_values(by="LUCRO LIQ", ascending=False)
+        fig_valor = px.bar(lucro_prod, x="LUCRO LIQ", y="SKU", orientation="h", title="Lucro Líquido Total por SKU")
+        st.plotly_chart(fig_valor, use_container_width=True)
+
+        st.subheader("📊 Lucro Líquido por Produto (SKU) - Percentual (%)")
+
+        lucro_pct = df_filtro.groupby("SKU").agg({"LUCRO LIQ": "sum", "VL.BRUTO": "sum"}).reset_index()
+        lucro_pct["% LUCRO"] = (lucro_pct["LUCRO LIQ"] / lucro_pct["VL.BRUTO"]) * 100
+
+        fig_pct = px.bar(lucro_pct, x="% LUCRO", y="SKU", orientation="h", title="Percentual de Lucro Líquido por SKU")
+        fig_pct.update_layout(xaxis_tickformat=".2f")
+        st.plotly_chart(fig_pct, use_container_width=True)
+        # =============================
+        # TABELA SIMPLIFICADA DE PREÇO E % LUCRO POR SKU
+        # =============================
+        st.markdown("---")
+        st.subheader("📄 Faixa de Preço e Lucro por SKU")
+        
+        # Calculando os preços e % de lucro
+        df_precos_aux = df_filtro.copy()
+        df_precos_aux["PRECO_UNIT"] = df_precos_aux["VL.BRUTO"] / df_precos_aux["QTDE"]
+        
+        precos_resumo = df_precos_aux.groupby("SKU").agg({
+            "PRECO_UNIT": ["min", "mean", "max"],
+            "LUCRO LIQ": "sum",
+            "VL.BRUTO": "sum",
+            "QTDE": "sum"
+        }).reset_index()
+        
+        precos_resumo.columns = [
+            "SKU", "PREÇO MÍNIMO UNIT", "PREÇO MÉDIO UNIT", "PREÇO MÁXIMO UNIT",
+            "LUCRO LIQ", "FATURAMENTO", "VOLUME"
+        ]
+        
+        # Cálculo dos % Lucro
+        precos_resumo["% LUCRO MIN"] = (precos_resumo["LUCRO LIQ"] / (precos_resumo["VOLUME"] * precos_resumo["PREÇO MÍNIMO UNIT"])) * 100
+        precos_resumo["% LUCRO MÉDIO"] = (precos_resumo["LUCRO LIQ"] / (precos_resumo["VOLUME"] * precos_resumo["PREÇO MÉDIO UNIT"])) * 100
+        precos_resumo["% LUCRO MAX"] = (precos_resumo["LUCRO LIQ"] / (precos_resumo["VOLUME"] * precos_resumo["PREÇO MÁXIMO UNIT"])) * 100
+        
+        # Formatação
+        for col in ["PREÇO MÍNIMO UNIT", "PREÇO MÉDIO UNIT", "PREÇO MÁXIMO UNIT"]:
+            precos_resumo[col] = precos_resumo[col].apply(formatar_moeda)
+        
+        for col in ["% LUCRO MIN", "% LUCRO MÉDIO", "% LUCRO MAX"]:
+            precos_resumo[col] = precos_resumo[col].apply(lambda x: f"{x:.2f}%" if isinstance(x, float) else x)
+        
+        precos_resumo["VOLUME"] = precos_resumo["VOLUME"].astype(int)
+        
+        # Exibição
+        st.dataframe(
+            precos_resumo[["SKU", "PREÇO MÍNIMO UNIT", "% LUCRO MIN", "PREÇO MÉDIO UNIT", "% LUCRO MÉDIO", "PREÇO MÁXIMO UNIT", "% LUCRO MAX"]],
+            use_container_width=True
+        )
+        # =============================
+        # ANÁLISE DO PESO DO FRETE POR CLIENTE
+        # =============================
+        st.markdown("---")
+        st.subheader("🚚 Peso do Frete sobre Faturamento por Cliente")
+        
+        # Verifica se existe coluna FRETE
+        if "FRETE TOTAL" not in carteira_df.columns:
+            st.warning("⚠️ A coluna 'FRETE TOTAL' não foi encontrada na base. Por favor, valide o arquivo de origem.")
         else:
-            try:
-                preco_equilibrio_unit = (custo_total_unit + frete_unit) / (1 - despesas_percentuais)
-                preco_equilibrio_unit = round(preco_equilibrio_unit, 2)
-            except ZeroDivisionError:
-                preco_equilibrio_unit = 0
+            # Agrupamento
+            df_frete = df_filtro.groupby("CLIENTE").agg({
+                "VL.BRUTO": "sum",
+                "FRETE TOTAL": "sum"
+            }).reset_index()
+        
+            df_frete["% FRETE / FATURAMENTO"] = (df_frete["FRETE TOTAL"] / df_frete["VL.BRUTO"]) * 100
+        
+            # Formatação
+            df_frete["VL.BRUTO"] = df_frete["VL.BRUTO"].apply(formatar_moeda)
+            df_frete["FRETE TOTAL"] = df_frete["FRETE TOTAL"].apply(formatar_moeda)
+            df_frete["% FRETE / FATURAMENTO"] = df_frete["% FRETE / FATURAMENTO"].apply(lambda x: f"{x:.2f}%")
+        
+            # Exibição Tabela
+            st.dataframe(df_frete, use_container_width=True)
+        
+            # Gráfico de Barras
+            st.subheader("📊 Percentual do Frete sobre Faturamento por Cliente")
+        
+            df_frete_grafico = df_filtro.groupby("CLIENTE").agg({
+                "VL.BRUTO": "sum",
+                "FRETE TOTAL": "sum"
+            }).reset_index()
+            df_frete_grafico["% FRETE / FATURAMENTO"] = (df_frete_grafico["FRETE TOTAL"] / df_frete_grafico["VL.BRUTO"]) * 100
+        
+            fig_frete = px.bar(
+                df_frete_grafico.sort_values("% FRETE / FATURAMENTO", ascending=False),
+                x="% FRETE / FATURAMENTO",
+                y="CLIENTE",
+                orientation="h",
+                title="Peso do Frete sobre Faturamento por Cliente"
+            )
+            fig_frete.update_layout(xaxis_title="% Frete sobre Faturamento", yaxis_title="Cliente")
+            fig_frete.update_traces(texttemplate="%{x:.2f}%", textposition="outside")
+            st.plotly_chart(fig_frete, use_container_width=True)
+        
+            # =============================
+            # GRÁFICO DE PIZZA CIF x FOB
+            # =============================
+            st.subheader("🥧 Distribuição CIF x FOB (por Volume Total de Caixas)")
+        
+            df_frete_pizza = carteira_df.groupby("TIPO_FRETE")["QTDE"].sum().reset_index()
+            df_frete_pizza["COND. FRETE"] = df_frete_pizza["TIPO_FRETE"].map({"C": "CIF", "F": "FOB"})
+            df_frete_pizza = df_frete_pizza[df_frete_pizza["QTDE"] > 0]
+        
+            fig_pizza = px.pie(
+                df_frete_pizza,
+                values="QTDE",
+                names="COND. FRETE",
+                title="Distribuição do Volume por Condição de Frete (CIF x FOB)"
+            )
+            fig_pizza.update_traces(textinfo="percent+label")
+        
+            st.plotly_chart(fig_pizza, use_container_width=True)
+         
+            # =============================
+            # FUNÇÃO MELHORADA DE RELATÓRIO ESTRATÉGICO
+            # =============================
+            def gerar_relatorio_estrategico(dados):
+                try:
+                    # Agrupamentos para análise
+                    def top_contribuintes(df, col, top_n=10):
+                        dados = df.groupby(col).agg({
+                            "VL.BRUTO": "sum",
+                            "LUCRO LIQ": "sum"
+                        }).reset_index()
+                        dados["% LUCRO"] = (dados["LUCRO LIQ"] / dados["VL.BRUTO"]) * 100
+                        dados = dados.sort_values("% LUCRO")
+                        maiores = dados.tail(top_n).to_dict(orient="records")
+                        menores = dados.head(top_n).to_dict(orient="records")
+                        return maiores, menores
+            
+                    grupos = ["CLIENTE", "SKU", "REDE", "VENDEDOR"]
+                    resumo_impacto = {}
+                    for g in grupos:
+                        if g in dados.columns:
+                            maiores, menores = top_contribuintes(dados, g, top_n=10)
+                            resumo_impacto[g] = {"maiores": maiores, "menores": menores}
+            
+                    resumo_exec = {
+                        "Faturamento Total ": f"R$ {dados['VL.BRUTO'].sum():,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+                        "Lucro Líquido Total ": f"R$ {dados['LUCRO LIQ'].sum():,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+                        "Margem Média ": f"{(dados['LUCRO LIQ'].sum() / dados['VL.BRUTO'].sum()) * 100:.2f}%",
+                    }
+            
+                    prompt = f"""
+                    Você é um analista de dados comerciais.
+                    Com base nas informações abaixo, gere um relatório estratégico destacando:
+            
+                    ✅ Diagnóstico da Margem: quais clientes, produtos (SKUs), redes e vendedores aumentam ou reduzem a margem (% lucro)?
+                    ✅ Apresente os **Top 10 que mais AUMENTAM** e os **Top 10 que mais REDUZEM** a margem para cada um dos grupos (cliente, produto, rede, vendedor).
+                    ✅ Apresente um plano de ação com sugestões específicas por grupo para elevar a margem global.
+            
+                    Resumo Executivo:
+                    {resumo_exec}
+            
+                    Impacto por Grupo:
+                    {resumo_impacto}
+            
+                    Gere a resposta em linguagem clara e executiva.
+                    """
+            
+                    resposta = openai.ChatCompletion.create(
+                        model="gpt-4o",
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.3,
+                        max_tokens=2000
+                    )
+                    return resposta["choices"][0]["message"]["content"]
+            
+                except Exception as e:
+                    st.error(f"Erro ao gerar relatório: {str(e)}")
+                    return None
+            
+            # =============================
+            # BLOCOS DE EXECUÇÃO (ajustado)
+            # =============================
+            if uploaded_file:
+                with st.expander("📄 Análise Estratégica - AI insights"):
+                    st.markdown("Relatório interpretativo com destaques dos principais fatores que impactam a margem.")
+            
+                    if st.button("📌 Gerar Diagnóstico"):
+                        with st.spinner("Analisando impacto por Cliente, Produto, Rede e Vendedor..."):
+                            relatorio = gerar_relatorio_estrategico(df_filtro)
+                            if relatorio:
+                                st.markdown("---")
+                                st.markdown(relatorio)
+                                st.success("✅ Diagnóstico gerado com sucesso!")
+        # =============================
+        # NOTA EXPLICATIVA E METODOLOGIA DE CÁLCULO
+        # =============================
 
-        df_atualizado.at[index, "Preço de Venda"] = preco_equilibrio_unit
+        st.markdown("---")
+        st.header("ℹ️ Nota Explicativa e Metodologia de Cálculo")
 
-    return df_atualizado, alertas
+        st.markdown("""
+        ### 🟢 Metodologia Aplicada
 
-# Botão
-if st.button("📌 Preencher com Ponto de Equilíbrio"):
-    df_base, alertas = preencher_preco_equilibrio(df_base)
-    if alertas:
-        for msg in alertas:
-            st.warning(msg)
+        #### 1️⃣ **Análise Comercial**
+        O relatório consolida informações de faturamento, volume, preço médio e lucro líquido com base nos dados da aba **CARTEIRA**, considerando os seguintes filtros:
+        - Cliente
+        - UF (Estado)
+        - Produto (SKU)
+        - Supervisor
+        - Vendedor
+        - Rede
 
-st.session_state.df_editado = df_base.copy()
+        Todos os cálculos, tabelas e gráficos respeitam os filtros aplicados na seção de **Filtros para Análise**.
 
-# Editor
-st.markdown("### ✏️ Edite os dados abaixo para simulação em lote")
-df_editado = st.data_editor(st.session_state.df_editado, use_container_width=True, num_rows="dynamic")
-st.session_state.df_editado = df_editado
+        #### 2️⃣ **Análise de Lucro**
+        O relatório apresenta:
+        - **Lucro por Cliente**
+        - **Lucro por Produto (SKU)**
+        - **Análise Detalhada do Preço Unitário e Lucro por SKU**
+          - Preço Unitário Médio, Mínimo e Máximo
+          - % de Lucro sobre cada um destes preços
+          - Lucro Unitário por SKU
+        - **Peso do Contrato por Cliente**
+          - Percentual do valor do contrato sobre o faturamento
+          - Impacto do contrato na margem de lucro
+          - As linhas com % Lucro Negativo estão destacadas em vermelho
 
-# Função cálculo
-def calcular_linha(row):
-    preco_venda = row["Preço de Venda"]
-    qtd = row["Quantidade"]
-    subtotal = preco_venda * qtd
+        #### 3️⃣ **Análise Fiscal**
+        A análise fiscal considera os tributos destacados na nota fiscal:
+        - ICMS
+        - ICMS-ST (destaque separado, não compõe lucro)
+        - PIS
+        - COFINS
+        - IPI
+        - IRPJ (sobre Lucro Líquido)
+        - CSLL (sobre Lucro Líquido)
 
-    frete_total = row["Frete Caixa"] * qtd if tipo_frete == "CIF" else 0
-    frete_unit = row["Frete Caixa"] if tipo_frete == "CIF" else 0
+        ##### Critérios:
+        - A **Participação dos Tributos no Faturamento Bruto** considera:
+            - ICMS, ICMS-ST, PIS, COFINS, IPI.
+        - A **Participação dos Tributos sobre o Lucro Líquido** considera:
+            - IRPJ e CSLL somente se o lucro líquido for positivo.
 
-    ipi_total = subtotal * row["IPI"]
-    mva_percentual = row["MVA"]
-    base_icms_st = (subtotal + ipi_total) * (1 + mva_percentual)
-    icms_proprio = subtotal * row["ICMS"]
-    icms_st = (base_icms_st * row["ICMS"]) - icms_proprio
-    icms_st = max(icms_st, 0)
+        O gráfico fiscal foi ajustado para:
+        - Separar a base de cálculo (Faturamento Bruto ou Lucro Líquido).
+        - Remover tributos zerados ou não aplicáveis no período.
+        - Apresentar os percentuais sobre a base correspondente.
 
-    custo_total_unit = row["Custo NET"] + row["Custo Fixo"]
-    despesas_percentuais = (
-        row["ICMS"] + row["COFINS"] + row["PIS"] +
-        row["Comissão"] + row["Bonificação"] +
-        row["Contigência"] + row["Contrato"] + row["%Estrategico"]
-    )
+        Além disso, o relatório calcula:
+        - **Total de Tributos Pagos** sobre cada base.
+        - Percentual total da carga tributária.
 
-    despesas_reais = preco_venda * despesas_percentuais * qtd + frete_total
-    lucro_bruto = (preco_venda - custo_total_unit) * qtd - despesas_reais
+        #### 4️⃣ **Importante**
+        Os percentuais de tributos são calculados exclusivamente para análise gerencial, sem caráter de apuração oficial.
 
-    if lucro_bruto > 0:
-        lucro_liquido = lucro_bruto / 1.34
-        irpj = lucro_liquido * 0.25
-        csll = lucro_liquido * 0.09
-    else:
-        lucro_liquido = lucro_bruto
-        irpj = 0
-        csll = 0
+        Todos os resultados apresentados consideram o regime tributário de **Lucro Real**.
 
-    receita_total = subtotal
-    lucro_percentual = (lucro_liquido / receita_total) * 100 if receita_total > 0 else 0
-    total_nf = subtotal + ipi_total + icms_st
+        ---
 
-    if lucro_liquido < 0 and despesas_percentuais < 1:
-        try:
-            preco_equilibrio_unit = (custo_total_unit + frete_unit) / (1 - despesas_percentuais)
-            preco_equilibrio_unit = round(preco_equilibrio_unit, 2)
-        except ZeroDivisionError:
-            preco_equilibrio_unit = 0
-    else:
-        preco_equilibrio_unit = preco_venda
+        ### 📄 **Resumo dos Cálculos**
+        - **% Lucro = (Lucro Líquido / Faturamento) x 100**
+        - **% Contrato = (Total Contrato / Faturamento) x 100**
+        - **% Lucro Após Contrato = ((Lucro Líquido - Total Contrato) / Faturamento) x 100**
+        - **Participação do Tributo = (Tributo / Base de Cálculo) x 100**
 
-    return pd.Series({
-        "Subtotal (R$)": subtotal,
-        "Frete Total (R$)": frete_total,
-        "IPI (R$)": ipi_total,
-        "Base ICMS-ST (R$)": base_icms_st,
-        "ICMS-ST (R$)": icms_st,
-        "Lucro Bruto (R$)": lucro_bruto,
-        "Lucro Líquido (R$)": lucro_liquido,
-        "IRPJ (R$)": irpj,
-        "CSLL (R$)": csll,
-        "Lucro %": lucro_percentual,
-        "Total NF (R$)": total_nf,
-        "Ponto de Equilíbrio (R$)": preco_equilibrio_unit
-    })
+        Os filtros aplicados impactam diretamente em todos os indicadores e gráficos deste relatório.
 
-# Cálculo
-resultados = st.session_state.df_editado.apply(calcular_linha, axis=1)
-resultado_final = pd.concat([st.session_state.df_editado, resultados], axis=1)
-
-# Resultado
-st.markdown("### 📊 Resultado da Simulação")
-def color_negative_red(val):
-    try:
-        if float(val) < 0:
-            return 'color: red'
-        return 'color: black'
-    except:
-        return 'color: black'
-
-styled_df = resultado_final.style.format({
-    "Preço de Venda": "R$ {:.2f}",
-    "Custo NET": "R$ {:.2f}",
-    "Custo Fixo": "R$ {:.2f}",
-    "Subtotal (R$)": "R$ {:.2f}",
-    "Frete Total (R$)": "R$ {:.2f}",
-    "IPI (R$)": "R$ {:.2f}",
-    "Base ICMS-ST (R$)": "R$ {:.2f}",
-    "ICMS-ST (R$)": "R$ {:.2f}",
-    "Lucro Bruto (R$)": "R$ {:.2f}",
-    "Lucro Líquido (R$)": "R$ {:.2f}",
-    "IRPJ (R$)": "R$ {:.2f}",
-    "CSLL (R$)": "R$ {:.2f}",
-    "Lucro %": "{:.2f}%",
-    "Total NF (R$)": "R$ {:.2f}",
-    "Ponto de Equilíbrio (R$)": "R$ {:.2f}"
-}).apply(lambda x: [color_negative_red(v) for v in x],
-        subset=["Lucro Bruto (R$)", "Lucro Líquido (R$)", "Lucro %"])
-
-st.dataframe(styled_df, use_container_width=True)
-
-# Exportação
-st.markdown("### 📄 Baixar resultado em Excel")
-excel_buffer = io.BytesIO()
-with pd.ExcelWriter(excel_buffer, engine="xlsxwriter") as writer:
-    resultado_final.to_excel(writer, index=False, sheet_name="Resultado")
-
-st.download_button(
-    label="📄 Baixar Excel com Resultado",
-    data=excel_buffer.getvalue(),
-    file_name="resultado_simulacao.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
-
-st.markdown("""
-### ℹ️ **Notas Explicativas**
-
-Este **Simulador de Formação de Preço de Venda - Sobel Suprema** foi desenvolvido para apoiar as áreas **Comercial, Financeira e Controladoria**, garantindo uma correta formação de preço, considerando todos os componentes de custo, despesas, impostos e margens estratégicas.
-
----
-
-### 🎯 **Objetivo**
-Permitir que os gestores realizem simulações e ajustes na composição do preço de venda, de forma prática e transparente, facilitando a análise do impacto de cada variável na margem e no resultado final.
-
----
-
-### 🧩 **Lógica de Cálculo Utilizada**
-
-1️⃣ **Subtotal Calculado**  
-O subtotal é obtido multiplicando o **Preço de Venda Unitário** pela **Quantidade**:
-
-> **Subtotal = Preço de Venda × Quantidade + Frete Total**  
-> (Frete Total = Frete por Caixa × Quantidade → Somente para frete CIF)
-
----
-
-2️⃣ **IPI (Imposto sobre Produtos Industrializados)**  
-Calculado sobre o subtotal:
-
-> **IPI Total = Subtotal × % IPI**
-
----
-
-3️⃣ **Base de Cálculo do ICMS-ST**  
-A base considera:
-
-> **Base ICMS-ST = (Subtotal + IPI Total) × (1 + MVA)**
-
-ICMS-ST a recolher:
-
-> **ICMS-ST = (Base ICMS-ST × % ICMS) - (Subtotal × % ICMS)**  
-*(Se resultado negativo, considera-se zero)*
-
----
-
-4️⃣ **Despesas Percentuais e Fixas**  
-Somatório dos percentuais:
-
-✅ ICMS  
-✅ COFINS  
-✅ PIS  
-✅ Comissão  
-✅ Bonificação  
-✅ Contingência  
-✅ Contrato  
-✅ % Estratégico  
-
-> **Despesas Reais = Preço de Venda × Σ(Percentuais) × Quantidade + Frete Total**
-
----
-
-5️⃣ **Lucro Bruto**
-
-> **Lucro Bruto = (Preço de Venda - Custo Total Unitário) × Quantidade - Despesas Reais**
-
----
-
-6️⃣ **Lucro Líquido (Inclui carga tributária presumida de 34%)**
-
-> **Lucro Líquido = Lucro Bruto ÷ 1,34** *(Se positivo)*
-
----
-
-7️⃣ **Impostos sobre Lucro**
-
-> **IRPJ = Lucro Líquido × 25%**  
-> **CSLL = Lucro Líquido × 9%**
-
----
-
-8️⃣ **Percentual de Lucro sobre Receita Bruta**
-
-> **Lucro % = (Lucro Líquido + Subtotal) × 100 ÷ Receita Bruta**
-
----
-
-9️⃣ **Total Nota Fiscal**
-
-> **Total NF = Subtotal + IPI Total + ICMS-ST**
-
----
-
-### 📝 **Regras & Premissas**
-
-- Os campos de **IPI, ICMS, COFINS, PIS, MVA e demais percentuais** devem estar preenchidos corretamente.
-- O **frete** impacta apenas quando o tipo for **CIF**.
-- **Bonificação, Comissão e Contrato** não entram na base de cálculo do ICMS-ST, sendo consideradas apenas na análise gerencial.
-- O cálculo de **IRPJ e CSLL** foi simplificado (25% e 9% respectivamente), podendo ser ajustado conforme o regime fiscal da empresa.
-- O campo **% Estratégico** adiciona um mark-up adicional ao preço de venda.
-
----
-
-**ℹ️ Nota Complementar: Lógica do Ponto de Equilíbrio**
-
-O "Preço de Equilíbrio" reflete o valor mínimo de venda necessário para cobrir todos os custos, despesas e impostos, resultando em um lucro líquido igual a zero. Abaixo, detalhamos a metodologia aplicada para esse cálculo:
-
-1. **Preço de Venda Inicial:** O simulador parte do preço de venda informado pelo usuário na tabela editável.
-2. **Cálculo do Lucro Líquido:** São descontados os custos fixos (Custo NET + Custo Fixo + Frete, se CIF), as despesas percentuais (ICMS, COFINS, PIS, Comissão, etc.) e, quando houver lucro bruto positivo, os impostos sobre o lucro — IRPJ (25%) e CSLL (9%).
-3. **Condição de Equilíbrio:** 
-   - Se o lucro líquido for positivo ou zero com o preço informado, o "Preço de Equilíbrio" mantém o valor do preço de venda, indicando que a operação já é viável.
-   - Se o lucro líquido for negativo, o "Preço de Equilíbrio" é recalculado para garantir que a receita iguale os custos e despesas, zerando o lucro líquido.
-4. **Fórmula do Preço de Equilíbrio (quando lucro é negativo):**
-""")
+        """)
+        st.markdown("---")
+        st.info("""
+        Este relatório foi elaborado para fornecer uma visão executiva consolidada entre análise comercial e fiscal.
+        A estrutura, lógica de cálculo e indicadores seguem boas práticas de mercado para empresas no regime de **Lucro Real**.
+        Para projeções e simulações, recomenda-se utilizar módulos específicos.
+        """)
 
